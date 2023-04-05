@@ -16,5 +16,5 @@ jobs:
       with:
         nim-version: ${{ matrix.nim-version }}
         repo-token: ${{ secrets.GITHUB_TOKEN }}
-    - run: nimble test -y
     - run: nimble test --gc:orc -y
+    - run: nimble test --threads:on --gc:orc -y

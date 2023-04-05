@@ -1,3 +1,6 @@
+when not defined(gcArc) and not defined(gcOrc):
+  {.error: "Using --mm:arc or --mm:orc is required by Whisky.".}
+
 import std/httpclient, std/sysrand, std/base64, std/sha1, std/uri, std/nativesockets, std/net
 
 type
@@ -23,6 +26,7 @@ proc destroy(ws: WebSocket) {.raises: [].} =
   deallocShared(ws)
 
 proc close*(ws: WebSocket) {.raises: [].} =
+  # Closes and deallocates the websocket.
   try:
     ws.socket.close()
   except:
