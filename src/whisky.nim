@@ -1,14 +1,8 @@
-when not defined(gcArc) and not defined(gcOrc):
-  {.error: "Using --mm:arc or --mm:orc is required by Whisky.".}
-
-import std/httpclient, std/sysrand, std/base64, std/sha1, std/uri, std/nativesockets, std/net, std/locks
+import std/httpclient, std/sysrand, std/base64, std/sha1, std/uri, std/nativesockets, std/net, std/times
 
 type
-  WebSocketObj = object
+  WebSocket* = ref object
     socket: Socket
-    readLock, writeLock: Lock
-
-  WebSocket* = ptr WebSocketObj
 
   Frame = object
     fin: bool
@@ -22,33 +16,14 @@ type
     kind*: MessageKind
     data*: string
 
-proc destroy(ws: WebSocket) {.raises: [].} =
-  `=destroy`(ws[])
-  deallocShared(ws)
-
 proc close*(ws: WebSocket) {.raises: [].} =
-  ## Closes and deallocates the websocket.
-  try:
-    # Unblock any send/recv calls (segfaults if we just close the socket)
-    # This works but I worry about a memory leak somewhere in std/net + OpenSSL
-    ws.socket.getFd().close()
-  except:
-    discard
-  # Ensure any send/recv threads are out
-  withLock ws.readLock:
-    withLock ws.writeLock:
-      discard
-  # Close the socket for real
   try:
     ws.socket.close()
   except:
     discard
-  deinitLock(ws.readLock)
-  deinitLock(ws.writeLock)
-  destroy(ws)
 
-proc receiveFrame(ws: WebSocket): Frame =
-  let b = ws.socket.recv(2)
+proc receiveFrame(ws: WebSocket, timeout = -1): Frame =
+  let b = ws.socket.recv(2, timeout)
   if b.len != 2:
     raise newException(CatchableError, "Error receiving WebSocket frame")
 
@@ -94,37 +69,42 @@ proc receiveFrame(ws: WebSocket): Frame =
     remaining -= buf.len
     result.payload &= buf
 
-proc receiveMessage*(ws: WebSocket): Message {.gcsafe.} =
-  withLock ws.readLock:
-    var frame = ws.receiveFrame()
-    case frame.opcode:
-    of 0x1: # Text
-      result.kind = TextMessage
-    of 0x2: # Binary
-      result.kind = BinaryMessage
-    of 0x8: # Close
-      raise newException(CatchableError, "WebSocket closed")
-    of 0x9: # Ping
-      result.kind = Ping
-    of 0xA: # Pong
-      result.kind = Pong
-    else:
-      raise newException(CatchableError, "Received invalid WebSocket frame")
+proc receiveMessage*(ws: WebSocket, timeout = -1): Message {.gcsafe.} =
+  let start = epochTime()
 
-    let isControlFrame = frame.opcode in [0x8.uint8, 0x9, 0xA]
-    if isControlFrame and not frame.fin:
-      raise newException(CatchableError, "Received invalid WebSocket frame")
+  var frame = ws.receiveFrame(timeout)
 
-    result.data = move frame.payload
+  case frame.opcode:
+  of 0x1: # Text
+    result.kind = TextMessage
+  of 0x2: # Binary
+    result.kind = BinaryMessage
+  of 0x8: # Close
+    raise newException(CatchableError, "WebSocket closed")
+  of 0x9: # Ping
+    result.kind = Ping
+  of 0xA: # Pong
+    result.kind = Pong
+  else:
+    raise newException(CatchableError, "Received invalid WebSocket frame")
 
-    if not frame.fin:
-      while true:
-        let continuation = ws.receiveFrame()
-        if continuation.opcode != 0:
-          raise newException(CatchableError, "Received invalid WebSocket frame")
-        result.data &= continuation.payload
-        if frame.fin:
-          break
+  let isControlFrame = frame.opcode in [0x8.uint8, 0x9, 0xA]
+  if isControlFrame and not frame.fin:
+    raise newException(CatchableError, "Received invalid WebSocket frame")
+
+  result.data = move frame.payload
+
+  if not frame.fin:
+    while true:
+      let remaining = timeout - ((epochTime() - start) * 1000).int
+      if remaining <= 0:
+        raise newException(TimeoutError, "")
+      let continuation = ws.receiveFrame(remaining)
+      if continuation.opcode != 0:
+        raise newException(CatchableError, "Received invalid WebSocket frame")
+      result.data &= continuation.payload
+      if frame.fin:
+        break
 
 proc encodeFrame(opcode: uint8, payload: sink string): string =
   assert (opcode and 0b11110000) == 0
@@ -159,17 +139,16 @@ proc encodeFrame(opcode: uint8, payload: sink string): string =
   result.add payload
 
 proc send*(ws: WebSocket, data: sink string, kind = TextMessage) {.gcsafe.} =
-  withLock ws.writeLock:
-    ws.socket.send(case kind:
-      of TextMessage:
-        encodeFrame(0x1, data)
-      of BinaryMessage:
-        encodeFrame(0x2, data)
-      of Ping:
-        encodeFrame(0x9, data)
-      of Pong:
-        encodeFrame(0xA, data)
-    )
+  ws.socket.send(case kind:
+    of TextMessage:
+      encodeFrame(0x1, data)
+    of BinaryMessage:
+      encodeFrame(0x2, data)
+    of Ping:
+      encodeFrame(0x9, data)
+    of Pong:
+      encodeFrame(0xA, data)
+  )
 
 proc newWebSocket*(url: string): WebSocket =
   ## Opens a new WebSocket connection.
@@ -231,7 +210,5 @@ proc newWebSocket*(url: string): WebSocket =
       "WebSocket upgrade response verification failed"
     )
 
-  result = cast[WebSocket](allocShared0(sizeof(WebSocketObj)))
+  result = WebSocket()
   result.socket = client.getSocket()
-  initLock(result.readLock)
-  initLock(result.writeLock)
