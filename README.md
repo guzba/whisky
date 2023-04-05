@@ -49,6 +49,6 @@ Check out the [examples/](https://github.com/guzba/whisky/tree/master/examples) 
 
 ## Pro Tips
 
-Whisky can be used in multi-threaded programs however each WebSocket should be owned and managed by just one thread. Reading and writing from separate threads is not currently supported.
+Whisky can be used in multi-threaded programs however each WebSocket should be owned and managed by just one thread. Reading and writing from separate threads is currently not supported.
 
 Dedicating a thread to opening and reading/writing to a WebSocket can work well if you have an otherwise synchronous program and would prefer managing a thread over managing an async loop.
