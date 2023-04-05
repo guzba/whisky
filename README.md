@@ -29,16 +29,15 @@ This makes things like scripts that connect to a WebSocket server or writing tes
 In more complex situations, you may need to send messages as well. In this case, you can use the timeout parameter of `receiveMessage` to give yourself opportunities to either send messages or check on other conditions:
 
 ```nim
-import whisky, std/net
+import whisky
 
 let ws = newWebSocket("ws://...")
 while true:
-  try:
-    # Raises a TimeoutError if no message has been received before the timeout
-    # in milliseconds has passed
-    echo ws.receiveMessage(1000)
-  except TimeoutError:
-    discard
+  # This call will return with none(Message) if a message is not received
+  # before the timeout in milliseconds has passed
+  let msg = ws.receiveMessage(1000)
+  if msg.isSome: # Did we receive a message?
+    echo msg
   # Check if there is anything to send or whatever
   # Loop back to the top and go back to waiting for messages
 ```
