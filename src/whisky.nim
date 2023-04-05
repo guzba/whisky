@@ -1,4 +1,6 @@
-import std/httpclient, std/sysrand, std/base64, std/sha1, std/uri, std/nativesockets, std/net, std/times
+import std/httpclient, std/sysrand, std/base64, std/sha1, std/uri, std/nativesockets, std/net, std/options
+
+export options
 
 type
   WebSocket* = ref object
@@ -61,30 +63,31 @@ proc receiveFrame(ws: WebSocket, timeout = -1): Frame =
   result.fin = fin
   result.opcode = opcode
 
-  var remaining = payloadLen
-  while remaining > 0:
-    var buf = ws.socket.recv(remaining)
-    if buf.len == 0:
+  if payloadLen > 0:
+    var buf = ws.socket.recv(payloadLen)
+    if buf.len == 0 or buf.len != payloadLen:
       raise newException(CatchableError, "Error receiving WebSocket frame")
-    remaining -= buf.len
     result.payload &= buf
 
-proc receiveMessage*(ws: WebSocket, timeout = -1): Message {.gcsafe.} =
-  let start = epochTime()
+proc receiveMessage*(ws: WebSocket, timeout = -1): Option[Message] {.gcsafe.} =
+  var frame: Frame
+  try:
+    frame = ws.receiveFrame(timeout)
+  except TimeoutError:
+    return none(Message)
 
-  var frame = ws.receiveFrame(timeout)
-
+  var message: Message
   case frame.opcode:
   of 0x1: # Text
-    result.kind = TextMessage
+    message.kind = TextMessage
   of 0x2: # Binary
-    result.kind = BinaryMessage
+    message.kind = BinaryMessage
   of 0x8: # Close
     raise newException(CatchableError, "WebSocket closed")
   of 0x9: # Ping
-    result.kind = Ping
+    message.kind = Ping
   of 0xA: # Pong
-    result.kind = Pong
+    message.kind = Pong
   else:
     raise newException(CatchableError, "Received invalid WebSocket frame")
 
@@ -92,19 +95,18 @@ proc receiveMessage*(ws: WebSocket, timeout = -1): Message {.gcsafe.} =
   if isControlFrame and not frame.fin:
     raise newException(CatchableError, "Received invalid WebSocket frame")
 
-  result.data = move frame.payload
+  message.data = move frame.payload
 
   if not frame.fin:
     while true:
-      let remaining = timeout - ((epochTime() - start) * 1000).int
-      if remaining <= 0:
-        raise newException(TimeoutError, "")
-      let continuation = ws.receiveFrame(remaining)
+      let continuation = ws.receiveFrame()
       if continuation.opcode != 0:
         raise newException(CatchableError, "Received invalid WebSocket frame")
-      result.data &= continuation.payload
+      message.data &= continuation.payload
       if frame.fin:
         break
+
+  return some(message)
 
 proc encodeFrame(opcode: uint8, payload: sink string): string =
   assert (opcode and 0b11110000) == 0
