@@ -12,7 +12,7 @@ proc receiveThreadProc() =
 var receiveThread: Thread[void]
 createThread(receiveThread, receiveThreadProc)
 
-for i in 0 ..< 1:
+for i in 0 ..< 4:
   echo "Sending a ping"
   ws.send("", Ping)
   sleep(2000)
