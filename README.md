@@ -6,7 +6,7 @@
 
 [API reference](https://nimdocs.com/guzba/whisky)
 
-Whisky is a blocking WebSocket client. This library provides an alternative to async for situations where it is either easier or more comfortable to write blocking code.
+Whisky is a blocking WebSocket client. This library provides an alternative to async for situations where it is easier or more comfortable to write blocking code.
 
 Whisky has no dependencies other than the Nim standard library.
 
@@ -22,9 +22,9 @@ while true:
   echo ws.receiveMessage()
 ```
 
-This makes things like scripts that connect to a WebSocket server or writing tests for a WebSocket server very easy.
+This makes things like scripts that connect to a WebSocket server or writing tests for a WebSocket server very easy. Whisky is very straightforward to use if you only need to receive messages from a WebSocket.
 
-In cases where you only only need to receive messages from a WebSocket as they arrive, this can be ideal. However, lets say you may need to send messages sometimes as well. In this case, you can use the timeout parameter of `receiveMessage` to give yourself opportunities to either send messages or check on other conditions:
+In more complex situations, you may need to send messages as well. In this case, you can use the timeout parameter of `receiveMessage` to give yourself opportunities to either send messages or check on other conditions:
 
 ```nim
 import whisky, std/net
@@ -41,8 +41,12 @@ while true:
   # Loop back to the top and go back to waiting for messages
 ```
 
+A setup like this may not be ideal for every situation but it can work very well in many programs. If this does not meet your needs you can always use an async approach using one of the other WebSocket libraries out there.
+
 Check out the [examples/](https://github.com/guzba/whisky/tree/master/examples) folder for more sample code using Whisky.
 
 ## Pro Tips
 
-While Whisky can be used in threaded programs, each WebSocket should be owned and managed by just one thread.
+Whisky can be used in multi-threaded programs however each WebSocket should be owned and managed by just one thread. Reading and writing from separate threads is not currently supported.
+
+Dedicating a thread to opening and reading/writing to a WebSocket can work well if you have an otherwise sychronous program and would prefer managing a thread over managing an async loop.
