@@ -10,6 +10,8 @@ Whisky is a blocking WebSocket client. This library provides an alternative to a
 
 Whisky has no dependencies other than the Nim standard library.
 
+Remember to include `-d:ssl` if connecting to `wss://` servers.
+
 ## Using Whisky
 
 Using Whisky can be as easy as:
