@@ -4,7 +4,7 @@
 
 ![Github Actions](https://github.com/guzba/whisky/workflows/Github%20Actions/badge.svg)
 
-[API reference](https://nimdocs.com/guzba/whisky)
+[API reference](https://guzba.github.io/whisky/)
 
 Whisky is a blocking WebSocket client. This library provides an alternative to async for situations where it is easier or more comfortable to write blocking code.
 
