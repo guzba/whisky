@@ -1,0 +1,11 @@
+WebSocket	whisky.html#WebSocket	whisky: WebSocket	
+TextMessage	whisky.html#TextMessage	MessageKind.TextMessage	
+BinaryMessage	whisky.html#BinaryMessage	MessageKind.BinaryMessage	
+Ping	whisky.html#Ping	MessageKind.Ping	
+Pong	whisky.html#Pong	MessageKind.Pong	
+MessageKind	whisky.html#MessageKind	whisky: MessageKind	
+Message	whisky.html#Message	whisky: Message	
+close	whisky.html#close,WebSocket	whisky: close(ws: WebSocket)	
+receiveMessage	whisky.html#receiveMessage,WebSocket,int	whisky: receiveMessage(ws: WebSocket; timeout = -1): Option[Message]	
+send	whisky.html#send,WebSocket,sinkstring	whisky: send(ws: WebSocket; data: sink string; kind = TextMessage)	
+newWebSocket	whisky.html#newWebSocket,string	whisky: newWebSocket(url: string): WebSocket	
