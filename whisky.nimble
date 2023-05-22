@@ -1,4 +1,4 @@
-version     = "0.1.1"
+version     = "0.1.2"
 author      = "Ryan Oldenburg"
 description = "Blocking WebSocket client"
 license     = "MIT"
