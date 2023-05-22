@@ -56,9 +56,9 @@ proc receiveFrame(ws: WebSocket, timeout = -1): Frame =
   else:
     var
       buf = ws.socket.recv(8)
-      l: uint16
+      l: uint32
     copyMem(l.addr, buf[4].addr, 4)
-    payloadLen = nativesockets.htons(l).int
+    payloadLen = nativesockets.htonl(l).int
 
   result.fin = fin
   result.opcode = opcode
