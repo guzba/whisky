@@ -1,4 +1,5 @@
-import std/httpclient, std/sysrand, std/base64, std/sha1, std/uri, std/nativesockets, std/net, std/options
+import std/httpclient, std/sysrand, std/base64, std/sha1, std/uri, std/nativesockets,
+    std/net, std/options, std/strutils
 
 export options
 
@@ -189,13 +190,13 @@ proc newWebSocket*(url: string): WebSocket =
       "Invalid WebSocket upgrade response code"
     )
 
-  if response.headers.getOrDefault("Connection") != "upgrade":
+  if cmpIgnoreCase(response.headers.getOrDefault("Connection"), "upgrade") != 0:
     raise newException(
       CatchableError,
       "WebSocket upgrade response missing Connection header"
     )
 
-  if response.headers.getOrDefault("Upgrade") != "websocket":
+  if cmpIgnoreCase(response.headers.getOrDefault("Upgrade"), "websocket") != 0:
     raise newException(
       CatchableError,
       "WebSocket upgrade response missing Upgrade header"
