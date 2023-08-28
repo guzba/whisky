@@ -1,11 +1,12 @@
-WebSocket	whisky.html#WebSocket	whisky: WebSocket	
-TextMessage	whisky.html#TextMessage	MessageKind.TextMessage	
-BinaryMessage	whisky.html#BinaryMessage	MessageKind.BinaryMessage	
-Ping	whisky.html#Ping	MessageKind.Ping	
-Pong	whisky.html#Pong	MessageKind.Pong	
-MessageKind	whisky.html#MessageKind	whisky: MessageKind	
-Message	whisky.html#Message	whisky: Message	
-close	whisky.html#close,WebSocket	whisky: close(ws: WebSocket)	
-receiveMessage	whisky.html#receiveMessage,WebSocket,int	whisky: receiveMessage(ws: WebSocket; timeout = -1): Option[Message]	
-send	whisky.html#send,WebSocket,sinkstring	whisky: send(ws: WebSocket; data: sink string; kind = TextMessage)	
-newWebSocket	whisky.html#newWebSocket,string	whisky: newWebSocket(url: string): WebSocket	
+nimTitle	whisky	whisky.html	module src/whisky		0
+nim	WebSocket	whisky.html#WebSocket	type WebSocket		7
+nim	TextMessage	whisky.html#TextMessage	MessageKind.TextMessage		15
+nim	BinaryMessage	whisky.html#BinaryMessage	MessageKind.BinaryMessage		15
+nim	Ping	whisky.html#Ping	MessageKind.Ping		15
+nim	Pong	whisky.html#Pong	MessageKind.Pong		15
+nim	MessageKind	whisky.html#MessageKind	enum MessageKind		15
+nim	Message	whisky.html#Message	object Message		18
+nim	close	whisky.html#close,WebSocket	proc close(ws: WebSocket)		22
+nim	receiveMessage	whisky.html#receiveMessage,WebSocket,int	proc receiveMessage(ws: WebSocket; timeout = -1): Option[Message]		73
+nim	send	whisky.html#send,WebSocket,sinkstring	proc send(ws: WebSocket; data: sink string; kind = TextMessage)		144
+nim	newWebSocket	whisky.html#newWebSocket,string	proc newWebSocket(url: string): WebSocket		156
