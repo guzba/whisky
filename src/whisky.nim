@@ -5,7 +5,7 @@ export options
 
 type
   WebSocket* = ref object
-    socket: Socket
+    socket*: Socket
 
   Frame = object
     fin: bool
