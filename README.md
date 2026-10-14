@@ -44,6 +44,27 @@ while true:
 
 A setup like this may not be ideal for every situation but it can work very well in many programs. If this does not meet your needs you can always use an async approach using one of the other WebSocket libraries out there.
 
+The receive timeout covers the entire call, including fragmented messages. Partial headers, payloads, and messages are preserved when a call returns `none(Message)`. Ping and pong messages can be returned between fragments; the next call resumes receiving the data message.
+
+## Connection options
+
+Pass additional HTTP headers for authentication or other handshake metadata, a connection timeout in milliseconds, and an incoming message-size limit in bytes:
+
+```nim
+import
+  std/httpcore,
+  whisky
+
+let
+  headers = newHttpHeaders({"Authorization": "Bearer ..."})
+  ws = newWebSocket("wss://...", headers = headers, timeout = 5000,
+    maxMessageBytes = 16 * 1024 * 1024)
+```
+
+Headers are copied without changing the caller's collection. Whisky sets the required WebSocket upgrade headers. The connection timeout defaults to `-1` (unlimited), and `maxMessageBytes` defaults to `0` (unlimited), preserving existing calls.
+
+The size limit applies to complete text and binary messages, including all their fragments. Control messages do not count toward it. Oversized lengths are rejected before reading their payloads. Close the connection after a message-size or protocol error.
+
 Check out the [examples/](https://github.com/guzba/whisky/tree/master/examples) folder for more sample code using Whisky.
 
 ## Pro Tips
