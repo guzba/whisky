@@ -14,6 +14,8 @@ const
   TrickleFragments = 20
   TrickleDelayMs = 25
   WholeCallTimeoutMs = 100
+  LargePayloadSize = 17 * 1024 * 1024
+  LargeReceiveTimeoutMs = 30_000
 
 proc serverFrame(opcode: uint8, payload: string, final = true): string =
   let first = opcode or (if final: 0x80'u8 else: 0'u8)
@@ -53,6 +55,13 @@ proc runFixture(mode: string) =
   if mode == "stall":
     doAssert stdin.readLine() == "quit"
     return
+  if mode == "auth":
+    doAssert headers["Authorization"] == "Bearer test-token"
+    doAssert headers["X-Custom"] == "test-value"
+    doAssert headers["Connection"] == "upgrade"
+    doAssert headers["Upgrade"] == "websocket"
+    doAssert headers["Sec-WebSocket-Version"] == "13"
+    doAssert decode(headers["Sec-WebSocket-Key"]).len == 16
   let
     key = headers["Sec-WebSocket-Key"]
     accept = encode(secureHash(key & "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").Sha1Digest)
@@ -227,6 +236,99 @@ proc testDisconnected(initialData: string) =
   doAssert failed
   doAssert fixture.process.waitForExit(5_000) == 0
 
+proc testHandshakeHeaders() =
+  let
+    fixture = startFixture("auth")
+    headers = newHttpHeaders({"Authorization": "Bearer test-token",
+      "X-Custom": "test-value", "Connection": "caller-connection",
+      "Upgrade": "caller-upgrade", "Sec-WebSocket-Key": "caller-key",
+      "Sec-WebSocket-Version": "caller-version"})
+    ws = newWebSocket(fixture.url, headers = headers, timeout = ReceiveTimeoutMs)
+  defer:
+    ws.close()
+    fixture.close()
+  doAssert headers["Connection"] == "caller-connection"
+  doAssert headers["Upgrade"] == "caller-upgrade"
+  doAssert headers["Sec-WebSocket-Key"] == "caller-key"
+  doAssert headers["Sec-WebSocket-Version"] == "caller-version"
+  fixture.sendBytes(serverFrame(1, "authenticated"))
+  ws.expectMessage(TextMessage, "authenticated")
+
+proc testConnectionTimeout() =
+  let fixture = startFixture("stall")
+  defer: fixture.close()
+  let started = getMonoTime()
+  var failed = false
+  try:
+    let ws = newWebSocket(fixture.url, timeout = PartialReadTimeoutMs)
+    ws.close()
+  except TimeoutError:
+    failed = true
+  let elapsed = (getMonoTime() - started).inMilliseconds
+  doAssert failed
+  doAssert elapsed < MaximumTimeoutElapsedMs
+
+proc testMessageLimit() =
+  let
+    fixture = startFixture()
+    ws = newWebSocket(fixture.url, maxMessageBytes = 6)
+  defer:
+    ws.close()
+    fixture.close()
+  fixture.sendBytes(serverFrame(1, "123456") & serverFrame(2, "123", false) &
+    serverFrame(9, "control-payload") & serverFrame(0, "456") & serverFrame(1, ""))
+  ws.expectMessage(TextMessage, "123456")
+  ws.expectMessage(Ping, "control-payload")
+  ws.expectMessage(BinaryMessage, "123456")
+  ws.expectMessage(TextMessage, "")
+
+proc testRejectedHeader(data: string, limit: int, expectedError: string) =
+  let
+    fixture = startFixture()
+    ws = newWebSocket(fixture.url, maxMessageBytes = limit)
+  defer:
+    ws.close()
+    fixture.close()
+  fixture.sendBytes(data)
+  var failure = ""
+  try:
+    discard ws.receiveMessage(PartialReadTimeoutMs)
+  except CatchableError as error:
+    failure = error.msg
+  doAssert expectedError in failure
+
+proc testUnlimitedMessage() =
+  let
+    fixture = startFixture()
+    ws = newWebSocket(fixture.url)
+    payload = repeat('x', LargePayloadSize)
+  defer:
+    ws.close()
+    fixture.close()
+  fixture.sendBytes(serverFrame(2, payload), wait = false)
+  let received = ws.receiveMessage(LargeReceiveTimeoutMs)
+  doAssert received.isSome
+  doAssert received.get.kind == BinaryMessage
+  doAssert received.get.data == payload
+  doAssert fixture.process.outputStream.readLine() == "sent"
+
+proc testInvalidOptions() =
+  var failures = 0
+  try:
+    discard newWebSocket("ws://127.0.0.1:0", maxMessageBytes = -1)
+  except ValueError:
+    inc failures
+  try:
+    discard newWebSocket("ws://127.0.0.1:0", timeout = -2)
+  except ValueError:
+    inc failures
+  let ws = WebSocket()
+  try:
+    discard ws.receiveMessage(-2)
+  except ValueError:
+    inc failures
+  doAssert failures == 3
+
 if paramCount() == 2 and paramStr(1) == "--fixture":
   runFixture(paramStr(2))
 else:
@@ -244,3 +346,18 @@ else:
   testDisconnected("")
   testDisconnected("\x81")
   testDisconnected("\x81\x05abc")
+  testHandshakeHeaders()
+  testConnectionTimeout()
+  testMessageLimit()
+  testRejectedHeader("\x81\x07", 6, "exceeds maxMessageBytes")
+  testRejectedHeader(serverFrame(1, "abc", false) & "\x80\x04", 6,
+    "exceeds maxMessageBytes")
+  testRejectedHeader("\x81\x7f\x00\x00\x00\x01\x00\x00\x00\x00", 6,
+    "exceeds maxMessageBytes")
+  testRejectedHeader("\x81\x7f\x80\x00\x00\x00\x00\x00\x00\x00", 0,
+    "Invalid WebSocket payload length")
+  testRejectedHeader("\x81\x7f\x7f\xff\xff\xff\xff\xff\xff\xff", 0,
+    "Invalid WebSocket payload length")
+  testRejectedHeader("\x81\x7e\x00\x01", 0, "Invalid WebSocket payload length")
+  testUnlimitedMessage()
+  testInvalidOptions()

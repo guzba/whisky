@@ -10,6 +10,7 @@ type
     fragmented: bool
     pendingMessage: Message
     receiveBuffer: string
+    maxMessageBytes: int
 
   Frame = object
     fin: bool
@@ -79,15 +80,33 @@ proc receiveFrame(ws: WebSocket, deadline: MonoTime, timeout: int): Frame =
       (size == 126 and payloadLen < 126) or
       (size == 127 and payloadLen <= uint16.high.uint64):
     raise newException(CatchableError, "Invalid WebSocket payload length")
-  ws.fillReceiveBuffer(headerLen + payloadLen.int, deadline, timeout)
   result.fin = (b0 and 0x80) != 0
   result.opcode = b0 and 0x0f
+  case result.opcode
+  of 0x8, 0x9, 0xA:
+    if not result.fin or payloadLen > 125:
+      raise newException(CatchableError, "Received invalid WebSocket control frame")
+  of 0x0, 0x1, 0x2:
+    if result.opcode == 0 and not ws.fragmented:
+      raise newException(CatchableError, "Unexpected WebSocket continuation frame")
+    if result.opcode != 0 and ws.fragmented:
+      raise newException(CatchableError, "Expected WebSocket continuation frame")
+    let accumulated = if result.opcode == 0: ws.pendingMessage.data.len else: 0
+    if payloadLen > (int.high - accumulated).uint64:
+      raise newException(CatchableError, "Invalid WebSocket message length")
+    if ws.maxMessageBytes > 0 and
+        payloadLen > (ws.maxMessageBytes - accumulated).uint64:
+      raise newException(CatchableError, "WebSocket message exceeds maxMessageBytes")
+  else:
+    raise newException(CatchableError, "Received invalid WebSocket frame")
+  ws.fillReceiveBuffer(headerLen + payloadLen.int, deadline, timeout)
   result.payload = ws.receiveBuffer[headerLen ..< ws.receiveBuffer.len]
   ws.receiveBuffer.setLen(0)
 
 proc receiveMessage*(ws: WebSocket, timeout = -1): Option[Message] {.gcsafe.} =
   ## Receives a message, preserving partial data across timeouts and controls.
   ## The timeout in milliseconds covers the entire call; -1 waits indefinitely.
+  ## Close the connection after a protocol or message-size error.
   if timeout < -1:
     raise newException(ValueError, "WebSocket receive timeout must be at least -1")
   let deadline = getMonoTime() + initDuration(milliseconds = max(0, timeout))
@@ -100,22 +119,16 @@ proc receiveMessage*(ws: WebSocket, timeout = -1): Option[Message] {.gcsafe.} =
 
     case frame.opcode
     of 0x8, 0x9, 0xA:
-      if not frame.fin or frame.payload.len > 125:
-        raise newException(CatchableError, "Received invalid WebSocket control frame")
       if frame.opcode == 0x8:
         raise newException(CatchableError, "WebSocket closed")
       return some(Message(kind: (if frame.opcode == 0x9: Ping else: Pong),
         data: move(frame.payload)))
     of 0x0:
-      if not ws.fragmented:
-        raise newException(CatchableError, "Unexpected WebSocket continuation frame")
       ws.pendingMessage.data.add(frame.payload)
       if frame.fin:
         ws.fragmented = false
         return some(move(ws.pendingMessage))
     of 0x1, 0x2:
-      if ws.fragmented:
-        raise newException(CatchableError, "Expected WebSocket continuation frame")
       let message = Message(kind: (if frame.opcode == 0x1: TextMessage else: BinaryMessage),
         data: move(frame.payload))
       if frame.fin:
@@ -169,8 +182,16 @@ proc send*(ws: WebSocket, data: sink string, kind = TextMessage) {.gcsafe.} =
       encodeFrame(0xA, data)
   )
 
-proc newWebSocket*(url: string): WebSocket =
+proc newWebSocket*(url: string, headers: HttpHeaders = nil, timeout = -1,
+    maxMessageBytes = 0): WebSocket =
   ## Opens a new WebSocket connection.
+  ## Additional headers are copied; required upgrade headers take precedence.
+  ## The HTTP connection timeout is in milliseconds; -1 waits indefinitely.
+  ## maxMessageBytes limits complete incoming data messages; 0 is unlimited.
+  if timeout < -1:
+    raise newException(ValueError, "WebSocket connection timeout must be at least -1")
+  if maxMessageBytes < 0:
+    raise newException(ValueError, "maxMessageBytes must be nonnegative")
 
   var uri = parseUri(url)
   case uri.scheme
@@ -190,15 +211,21 @@ proc newWebSocket*(url: string): WebSocket =
   if not urandom(websocketKey.toOpenArrayByte(0, 15)):
     raise newException(CatchableError, "Failed to generate WebSocket key")
 
-  var headers = newHttpHeaders()
-  headers["Connection"] = "upgrade"
-  headers["Upgrade"] = "websocket"
-  headers["Sec-WebSocket-Key"] = base64.encode(websocketKey)
-  headers["Sec-WebSocket-Version"] = $13
+  var handshakeHeaders = newHttpHeaders()
+  if headers != nil:
+    for key, value in headers:
+      handshakeHeaders.add(key, value)
+  handshakeHeaders["Connection"] = "upgrade"
+  handshakeHeaders["Upgrade"] = "websocket"
+  handshakeHeaders["Sec-WebSocket-Key"] = base64.encode(websocketKey)
+  handshakeHeaders["Sec-WebSocket-Version"] = $13
 
-  let
-    client = newHttpClient(headers = headers)
-    response = client.get($uri)
+  let client = newHttpClient(headers = handshakeHeaders, timeout = timeout)
+  var upgraded = false
+  defer:
+    if not upgraded:
+      client.close()
+  let response = client.get($uri)
 
   if response.code != Http101:
     raise newException(
@@ -229,5 +256,6 @@ proc newWebSocket*(url: string): WebSocket =
       "WebSocket upgrade response verification failed"
     )
 
-  result = WebSocket()
+  result = WebSocket(maxMessageBytes: maxMessageBytes)
   result.socket = client.getSocket()
+  upgraded = true
