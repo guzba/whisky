@@ -1,11 +1,13 @@
-import std/httpclient, std/sysrand, std/base64, std/sha1, std/uri, std/nativesockets,
-    std/net, std/options, std/strutils
+import
+  std/[base64, httpclient, nativesockets, net, options, sha1, strutils, sysrand, uri]
 
 export options
 
 type
   WebSocket* = ref object
     socket*: Socket
+    fragmented: bool
+    pendingMessage: Message
 
   Frame = object
     fin: bool
@@ -71,43 +73,40 @@ proc receiveFrame(ws: WebSocket, timeout = -1): Frame =
     result.payload &= buf
 
 proc receiveMessage*(ws: WebSocket, timeout = -1): Option[Message] {.gcsafe.} =
-  var frame: Frame
-  try:
-    frame = ws.receiveFrame(timeout)
-  except TimeoutError:
-    return none(Message)
+  ## Receives a message, preserving fragmented data between control messages.
+  while true:
+    var frame: Frame
+    try:
+      frame = ws.receiveFrame(timeout)
+    except TimeoutError:
+      return none(Message)
 
-  var message: Message
-  case frame.opcode:
-  of 0x1: # Text
-    message.kind = TextMessage
-  of 0x2: # Binary
-    message.kind = BinaryMessage
-  of 0x8: # Close
-    raise newException(CatchableError, "WebSocket closed")
-  of 0x9: # Ping
-    message.kind = Ping
-  of 0xA: # Pong
-    message.kind = Pong
-  else:
-    raise newException(CatchableError, "Received invalid WebSocket frame")
-
-  let isControlFrame = frame.opcode in [0x8.uint8, 0x9, 0xA]
-  if isControlFrame and not frame.fin:
-    raise newException(CatchableError, "Received invalid WebSocket frame")
-
-  message.data = move frame.payload
-
-  if not frame.fin:
-    while true:
-      let continuation = ws.receiveFrame()
-      if continuation.opcode != 0:
-        raise newException(CatchableError, "Received invalid WebSocket frame")
-      message.data &= continuation.payload
+    case frame.opcode
+    of 0x8, 0x9, 0xA:
+      if not frame.fin or frame.payload.len > 125:
+        raise newException(CatchableError, "Received invalid WebSocket control frame")
+      if frame.opcode == 0x8:
+        raise newException(CatchableError, "WebSocket closed")
+      return some(Message(kind: (if frame.opcode == 0x9: Ping else: Pong),
+        data: move(frame.payload)))
+    of 0x0:
+      if not ws.fragmented:
+        raise newException(CatchableError, "Unexpected WebSocket continuation frame")
+      ws.pendingMessage.data.add(frame.payload)
       if frame.fin:
-        break
-
-  return some(message)
+        ws.fragmented = false
+        return some(move(ws.pendingMessage))
+    of 0x1, 0x2:
+      if ws.fragmented:
+        raise newException(CatchableError, "Expected WebSocket continuation frame")
+      let message = Message(kind: (if frame.opcode == 0x1: TextMessage else: BinaryMessage),
+        data: move(frame.payload))
+      if frame.fin:
+        return some(message)
+      ws.pendingMessage = message
+      ws.fragmented = true
+    else:
+      raise newException(CatchableError, "Received invalid WebSocket frame")
 
 proc encodeFrame(opcode: uint8, payload: sink string): string =
   assert (opcode and 0b11110000) == 0
