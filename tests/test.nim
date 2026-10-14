@@ -1,5 +1,5 @@
 import
-  std/[base64, httpcore, net, os, osproc, sha1, streams, strutils],
+  std/[base64, httpcore, monotimes, net, os, osproc, sha1, streams, strutils, times],
   whisky
 
 type
@@ -9,6 +9,11 @@ type
 
 const
   ReceiveTimeoutMs = 2_000
+  PartialReadTimeoutMs = 40
+  MaximumTimeoutElapsedMs = 1_000
+  TrickleFragments = 20
+  TrickleDelayMs = 25
+  WholeCallTimeoutMs = 100
 
 proc serverFrame(opcode: uint8, payload: string, final = true): string =
   let first = opcode or (if final: 0x80'u8 else: 0'u8)
@@ -58,6 +63,14 @@ proc runFixture(mode: string) =
       break
     if command == "disconnect":
       return
+    if command == "trickle":
+      socket.send(serverFrame(1, "a", false))
+      for i in 0 ..< TrickleFragments:
+        sleep(TrickleDelayMs)
+        socket.send(serverFrame(0, "b", i == TrickleFragments - 1))
+      stdout.writeLine("sent")
+      stdout.flushFile()
+      continue
     socket.send(decode(command))
     stdout.writeLine("sent")
     stdout.flushFile()
@@ -135,6 +148,85 @@ proc testInvalidSequence(data: string) =
     failed = true
   doAssert failed
 
+proc expectTimeout(ws: WebSocket) =
+  let
+    started = getMonoTime()
+    received = ws.receiveMessage(PartialReadTimeoutMs)
+    elapsed = (getMonoTime() - started).inMilliseconds
+  doAssert received.isNone
+  doAssert elapsed >= PartialReadTimeoutMs div 2
+  doAssert elapsed < MaximumTimeoutElapsedMs
+
+proc testPartialFrame(payload: string, splits: seq[int]) =
+  let
+    fixture = startFixture()
+    ws = newWebSocket(fixture.url)
+    frame = serverFrame(1, payload)
+  defer:
+    ws.close()
+    fixture.close()
+  var start = 0
+  for stop in splits:
+    fixture.sendBytes(frame[start ..< stop])
+    ws.expectTimeout()
+    start = stop
+  fixture.sendBytes(frame[start ..< frame.len], wait = false)
+  ws.expectMessage(TextMessage, payload)
+  doAssert fixture.process.outputStream.readLine() == "sent"
+
+proc testContinuationTimeout() =
+  let
+    fixture = startFixture()
+    ws = newWebSocket(fixture.url)
+  defer:
+    ws.close()
+    fixture.close()
+  fixture.sendBytes(serverFrame(1, "abc", false))
+  ws.expectTimeout()
+  fixture.sendBytes(serverFrame(9, "ping"))
+  ws.expectMessage(Ping, "ping")
+  fixture.sendBytes("\x80")
+  ws.expectTimeout()
+  fixture.sendBytes("\x03def")
+  ws.expectMessage(TextMessage, "abcdef")
+
+proc testWholeCallTimeout() =
+  let
+    fixture = startFixture()
+    ws = newWebSocket(fixture.url)
+  defer:
+    ws.close()
+    fixture.close()
+  fixture.process.inputStream.writeLine("trickle")
+  fixture.process.inputStream.flush()
+  let
+    started = getMonoTime()
+    received = ws.receiveMessage(WholeCallTimeoutMs)
+    elapsed = (getMonoTime() - started).inMilliseconds
+  doAssert received.isNone
+  doAssert elapsed < MaximumTimeoutElapsedMs
+  ws.expectMessage(TextMessage, "a" & repeat('b', TrickleFragments))
+  doAssert fixture.process.outputStream.readLine() == "sent"
+
+proc testDisconnected(initialData: string) =
+  let
+    fixture = startFixture()
+    ws = newWebSocket(fixture.url)
+  defer:
+    ws.close()
+    fixture.process.close()
+  if initialData.len > 0:
+    fixture.sendBytes(initialData)
+  fixture.process.inputStream.writeLine("disconnect")
+  fixture.process.inputStream.flush()
+  var failed = false
+  try:
+    discard ws.receiveMessage(ReceiveTimeoutMs)
+  except CatchableError:
+    failed = true
+  doAssert failed
+  doAssert fixture.process.waitForExit(5_000) == 0
+
 if paramCount() == 2 and paramStr(1) == "--fixture":
   runFixture(paramStr(2))
 else:
@@ -144,3 +236,11 @@ else:
   testInvalidSequence(serverFrame(1, "abc", false) & serverFrame(1, "unexpected"))
   testInvalidSequence(serverFrame(9, "ping", false))
   testInvalidSequence(serverFrame(9, repeat('x', 126)))
+  testPartialFrame("abcdef", @[1, 3])
+  testPartialFrame(repeat('x', 126), @[1, 3, 40])
+  testPartialFrame(repeat('x', 65_536), @[1, 5, 32])
+  testContinuationTimeout()
+  testWholeCallTimeout()
+  testDisconnected("")
+  testDisconnected("\x81")
+  testDisconnected("\x81\x05abc")
